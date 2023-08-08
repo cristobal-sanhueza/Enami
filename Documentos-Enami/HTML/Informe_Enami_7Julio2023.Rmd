@@ -1,0 +1,964 @@
+---
+title: "Evaluación del Modelo de Pronóstico de SO2 para ENAMI"
+author: "Cristobal Sanhueza"
+date: "2023-07-29"
+output: html_document
+---
+
+```{r load_libraries, include=FALSE}
+library(openair)
+library(pander)
+library(tidyverse)
+library(dygraphs)
+library(xts)
+library(readxl)
+library(RColorBrewer)
+library(data.table)
+library(gplots)
+library(scales)
+library(hydroGOF)
+library(cvms)
+library(lubridate)
+library(stringr)
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+MesDelReporte = "julio"
+  
+start_date <- '01-07-2023'
+end_date <- '31-07-2023'
+
+fecha_comienzo <- as.Date(start_date, format='%d-%m-%Y')
+fecha_comienzo_dia <- format(fecha_comienzo, format = "%d")
+fecha_termino <- as.Date(end_date, format='%d-%m-%Y')
+fecha_termino_dia <- format(fecha_termino, format = "%d")
+fecha_termino_mes <- format(fecha_termino, format = "%m")
+fecha_termino_year <- format(fecha_termino, format = "%Y")
+
+# Create a lookup vector for Spanish month names
+spanish_months <- c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", 
+                    "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
+
+# Use the month number to get the Spanish month name
+fecha_termino_mes_nombre <- spanish_months[as.numeric(fecha_termino_mes)]
+
+fecha_entrega <- fecha_termino %m+% months(1)
+Mes_de_entrega <- format(fecha_entrega, format = "%m")
+Year_de_entrega <- format(fecha_entrega, format = "%Y")
+
+Mes_de_entrega_nombre <- spanish_months[as.numeric(Mes_de_entrega)]
+
+# Fecha para ELABORACION, REVISION, APROBACION
+first_day_next_month <- floor_date(fecha_termino %m+% months(1), "month")
+first_day_next_month_weekday <- wday(first_day_next_month, week_start = getOption("lubridate.week.start", 1))
+
+if(first_day_next_month_weekday > 5) {
+    first_day_next_month <- first_day_next_month + (8 - first_day_next_month_weekday)
+}
+
+Primer_dia_habil_sgte_mes <- format(first_day_next_month, format='%d-%m-%Y')
+
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+
+
+##### COPIAPO #####
+
+#SO2 MOD #
+
+path_so2_mod_copiapo <- paste0('/Users/cristobal512/Desktop/geoaire/ENAMI/Modelados/Geologger/calidad-aire-dia-hora_Copiapo-PRO_', start_date, '_a_', end_date, '.csv')
+
+SO2_Modelados_Copiapo <- read_csv(path_so2_mod_copiapo, col_types = cols(Fecha = col_date(format = "%d/%m/%Y")))
+
+SO2_Modelados_Copiapo <- SO2_Modelados_Copiapo %>% 
+  rename(SO2_Mod = `SO₂ (µg/m³N)`)
+
+SO2_Modelados_Copiapo <- SO2_Modelados_Copiapo %>%
+  mutate(Fecha = ymd_h(paste(Fecha, Hora)))
+
+MeanSO2byHour_Modelados_Copiapo <- SO2_Modelados_Copiapo %>% 
+  select(Hora, SO2_Mod) %>% 
+  group_by(Hora) %>% 
+  summarise(SO2_Mod = mean(SO2_Mod, na.rm = TRUE))
+
+
+#SO2 OBS #
+
+path_SO2_obs_Copiapo <- paste0('/Users/cristobal512/Desktop/geoaire/ENAMI/Observados/Geologger/calidad-aire-dia-hora_Copiapo_', start_date, '_a_', end_date, '.csv')
+
+SO2_Observados_Copiapo <- read_csv(path_SO2_obs_Copiapo, col_types = cols(Fecha = col_date(format = "%d/%m/%Y")))
+
+SO2_Observados_Copiapo <- SO2_Observados_Copiapo %>% 
+  rename(SO2_Obs = `SO₂ (µg/m³N)`)
+
+SO2_Observados_Copiapo <- SO2_Observados_Copiapo %>%
+  mutate(Fecha = ymd_h(paste(Fecha, Hora)))
+
+MeanSO2byHour_Observados_Copiapo <- SO2_Observados_Copiapo %>% 
+  select(Hora, SO2_Obs) %>% 
+  group_by(Hora) %>% 
+  summarise(SO2_Obs = mean(SO2_Obs, na.rm = TRUE))
+
+# MET MOD #
+
+path_met_mod_Copiapo <- paste0('/Users/cristobal512/Desktop/geoaire/ENAMI/Modelados/Geologger/Copiapo-PRO_', start_date, '_a_', end_date, '.csv')
+
+Met_Modelados_Copiapo <- read_csv(path_met_mod_Copiapo,
+                          col_types = cols(Fecha = col_date(format = "%d/%m/%Y")),
+                          locale = locale(decimal_mark = ","))
+
+Met_Modelados_Copiapo <- Met_Modelados_Copiapo %>% 
+  rename(date = Fecha,
+         wd = `Direccion viento (°)`,
+         ws = `Velocidad del viento (m/s)`)
+
+Met_Modelados_Copiapo <- Met_Modelados_Copiapo %>%
+  mutate(date = ymd_h(paste(date, Hora)))
+
+# MET OBS #
+
+path_met_obs_Copiapo <- paste0('/Users/cristobal512/Desktop/geoaire/ENAMI/Observados/Geologger/Copiapo_', start_date, '_a_', end_date, '.csv')
+
+Met_Observados_Copiapo <- read_csv(path_met_obs_Copiapo, col_types = cols(Fecha = col_date(format = "%d/%m/%Y")), locale = locale(decimal_mark = ","))
+
+Met_Observados_Copiapo <- Met_Observados_Copiapo %>% 
+  rename(date = Fecha,
+         wd = `Direccion viento (°)`,
+         ws = `Velocidad del viento (m/s)`)
+
+Met_Observados_Copiapo <- Met_Observados_Copiapo %>%
+  mutate(date = ymd_h(paste(date, Hora)))
+
+
+```
+
+<style>
+  /* Center the title */
+  h1.title {
+    text-align: center;
+  }
+
+  /* Hide the author and date */
+  .author, .date {
+    display: none;
+  }
+</style>
+
+<style>
+  /* Center the table */
+  .centered-table {
+    margin: 0 auto;
+  }
+</style>
+
+<style>
+  .justified-text {
+    text-align: justify;
+  }
+</style>
+
+<style>
+  .centered-text {
+    text-align: center;
+  }
+</style>
+
+<style>
+  .centered-images {
+    display: flex;
+    justify-content: center;
+  }
+  .centered-images img {
+    width: 400px;
+    height: 300px;
+    object-fit: cover;
+    margin: 5px;
+  }
+</style>
+
+
+# {.tabset .tabset-fade .tabset-pills}
+
+## Introducción
+
+<div class="centered-text">
+  <h3>Evaluación del Modelo de Pronóstico de SO2 de ENAMI</h3>
+</div>
+
+<br>
+
+<div class="centered-text">
+  <p><b><u>desde `r fecha_comienzo_dia` al `r fecha_termino_dia` `r fecha_termino_mes_nombre` `r fecha_termino_year`</u></b></p>
+</div>
+
+
+<br>
+
+<div class="centered-images">
+  <figure>
+    <img src="Imagenes/Industria.jpg" alt="Image 1">
+  </figure>
+  <figure>
+    <img src="Imagenes/Geomet.png" alt="Image 2">
+  </figure>
+</div>
+
+<br>
+
+<div class="centered-text">
+  <p>Elaborado por:
+
+**GEOAIRE AMBIENTAL SpA**
+
+Para:
+
+**ENAMI**
+
+`r Mes_de_entrega_nombre` `r Year_de_entrega`</p>
+</div>
+
+<br>
+
+```{r, message = FALSE, echo = FALSE}
+
+df <- data.frame(`Nº Proyecto` = c("G11-21"),
+                 Elaboración = paste('CSD', Primer_dia_habil_sgte_mes),
+                 Revisión = paste('MTV', Primer_dia_habil_sgte_mes),
+                 Aprobó = paste('PSH', Primer_dia_habil_sgte_mes),
+                 Versión = "V1")
+
+pander(df, justify = c("center"))
+```
+
+<br>
+
+**ESTUDIO DESARROLLADO POR:**
+
+<div style="display: flex; justify-content: space-between;">
+  <div>Dr. Ing. Pedro Sanhueza H.</div>
+  <div>Jefe de Proyecto</div>
+</div>
+
+<div style="display: flex; justify-content: space-between;">
+  <div>Cristián Ibarra F.</div>
+  <div>Especialista Calidad del aire</div>
+</div>
+
+<br>
+
+**CONTRAPARTE TÉCNICA:**
+
+<div style="display: flex; justify-content: space-between;">
+  <div>Viviana Riveros</div>
+  <div>Medio Ambiente ENAMI</div>
+</div>
+
+<br>
+
+### 1	INTRODUCCIÓN
+
+<div class="justified-text">
+
+<p>La Fundición Hernán Videla Lira (FHVL), de la Empresa Nacional de Minería (ENAMI), realiza una serie de procesos que generan emisiones de dióxido de azufre (SO2), el cual se captura y transforma en plantas de ácido. Una parte del SO2 no logra ser capturado y éste se transporta y dispersa según las condiciones meteorológicas imperantes, generando en algunas ocasiones, altos niveles de SO2, el cual se registra en las estaciones monitoras en Paipote, Copiapó y Tierra Amarilla.
+
+ENAMI posee un compromiso contenido en su Resolución de Calificación Ambiental (RCA), que consiste en generar un Plan de Contingencia que permita predecir eventos de contingencia atmosférica y de altas concentraciones de SO2. Estos eventos pueden ser condiciones de viento, estabilidad atmosférica, etc., que generen poca ventilación, y por tanto, ser capaces de gatillar contingencias por altas concentraciones de SO2. Es así como la FHVL posee un sistema en línea que permite la decisión y alerta oportuna de eventos de contaminación por SO2 en la zona. Todo lo anterior, se sustenta en un modelo de pronóstico meteorológico y de concentraciones de SO2, que permiten anticipar eventos de altas concentraciones de SO2, debido a condiciones meteorológicas adversas para la dispersión.
+
+Para esto se utilizan los niveles que gatillan episodios adversos por SO2, los cuales corresponden a concentraciones horarias de SO2 sobre 500 µg/m3 (Alerta 1), y sobre 650 µg/m3 (Alerta 2).  Cuando se llegan a esos umbrales, se activa un plan de acción predefinido.
+
+Para anticiparse a eventos adversos de concentraciones de SO2, que pongan en riesgo la salud de las personas, la FHVL dispone de un Sistema de Pronóstico meteorológico y de concentraciones de SO2, el cual se compone de un sistema de Alerta y un Plan de Contingencia, que permite actuar con antelación, cuando las condiciones meteorológicas unidas a la operación, puedan poner en riesgo a la salud de su comunidad.
+
+El sistema de Pronóstico se denomina *GEOMET*, el cual contiene módulos de Pronóstico Meteorológico, Alertas por SO2, Plan de Contingencia, Análisis de trayectorias de masas de aire, pronósticos de tormenta eléctrica y radiación UV. Todas estas herramientas ayudan a la operación en la toma de decisión que minimiza los efectos adversos por condiciones meteorológicas adversas y por SO2.
+
+*GEOMET* es una aplicación web, con claves, el cual despliega el pronóstico de SO2 y además envía reportes automáticos todos los días a las 08:00 AM, a un grupo de usuarios que requieren conocer el pronóstico de la meteorología y SO2 en la zona. Además, los usuarios pueden ver los resultados en la aplicación web en cualquier momento.<p>
+
+</div>
+
+
+### 1.1	OBJETIVO
+
+<div class="justified-text">
+
+<p>El objetivo de este informe es evaluar el modelo de pronóstico de concentraciones de SO2. Para evaluar el desempeño del modelo de pronóstico, se comparan los valores medidos (observados) con los valores pronosticados por el modelo.<p>
+
+</div>
+
+
+
+## Medidas de Desempeño del Modelo de Pronóstico
+
+### Medidas de Desempeño del Modelo de Pronóstico
+
+Para evaluar el desempeño del pronóstico de concentraciones horarias de SO2, se utilizan bandas o rangos de valores, de acuerdo a los niveles donde se toman medidas de gestión de calidad del aire, es decir, en los niveles Alerta 1 y Alerta 2.
+
+Es así como los niveles de interés para la gestión del SO2 son las que se indican en la Tabla II.1.
+
+<br>
+
+<div class="centered-text">
+  <p>**Tabla II.1: Niveles de Interés**</p>
+</div>
+
+<center>
+
+```{r, message = FALSE, echo = FALSE}
+
+df <- data.frame(Nivel = c("Bueno", "Regular", "Altera1", "Alerta2", "Alerta3"),
+                 `Concentración de SO2[µg/m3]` = c("0 - 350", "350 - 500", "500 - 650", "650 - 950", "> 950"),
+                 Descripción = c("Sin riesgo para la salud", "", "Alerta para la salud", "Pre-Emergencia", "Emergencia"))
+
+colnames(df) <- c("Nivel", "Concentración de SO2[µg/m3]", "Descripción")
+
+pander(df, justify = c("center", "center", "left"))
+
+```
+
+
+</center>
+
+<br>
+
+Se considera un acierto, si el pronóstico y la medición de las concentraciones de SO2 están en el mismo nivel. Estadísticamente, el acierto se estima a través de la Exactitud, la cual se define como el porcentaje de veces que el modelo de pronóstico coincide con lo observado, respecto al total de pronósticos realizados. La evaluación se realiza considerando el pronóstico de la concentración de SO2 estimada por el modelo, con la concentración de SO2 efectivamente medida en las estaciones monitoras entorno a la FHVL.
+
+La Figura 2.1 muestra la localización de la FHVL y las estaciones monitoras donde se evalúa el desempeño del modelo de pronóstico.
+
+<br>
+
+<div class="centered-images">
+  <figure>
+    <img src="Imagenes/FHVL_location.jpg" alt="Image 1">
+  </figure>
+</div>
+
+<br>
+
+<div class="centered-text">
+  <p>**Figura 2.1: Localización de la FHVL y estaciones monitoras de SO2**</p>
+</div>
+
+## Copiapó
+
+### EVALUACIÓN DEL DESEMPEÑO
+
+Para evaluar el desempeño del modelo de pronóstico, se dispone de la base de datos `r MesDelReporte` `r fecha_termino_year`, de las concentraciones de SO2 medidas en las estaciones de ENAMI en la zona, la cual se compara con las concentraciones de SO2 pronosticadas por GEOMET para igual período, en cada estación monitora.
+
+<br>
+
+#### 3.1	EVALUACIÓN DEL PRONÓSTICO METEOROLÓGICO
+
+La Figura 3.1 muestra la serie de tiempo de la Velocidad del viento (m/s) medida y modelada en la estación Copiapó. De ella se observa que el modelo de pronóstico meteorológico logra reproducir satisfactoriamente el ciclo diario y la tendencia de la velocidad del viento. 
+
+<div style="text-align: center;">
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE}
+
+Velocidad <- inner_join(Met_Observados_Copiapo[c('date', 'ws')], Met_Modelados_Copiapo[c('date', 'ws')], by = "date")
+
+Velocidad_longer <- pivot_longer(Velocidad, cols = c("ws.x", "ws.y"))
+
+Velocidad_longer %>%
+  ggplot(aes(x = date, y = value, color = name)) +
+  geom_line() +
+  theme_bw() +
+  theme(legend.position = "top", legend.title = element_blank(), axis.text.x = element_text(angle = 30, hjust = 1)) +
+  labs(x = "", y = "Velocidad de Viento (m/s)") +
+  scale_color_discrete(labels = c("Observado", "Modelado")) +
+  scale_x_datetime(date_labels = "%d %b", date_breaks = "4 day")
+
+```
+
+</div>
+
+<div class="centered-text">
+  <p>**Figura 3.1: Serie de tiempo de la Velocidad del viento medida y modelada de la estación Copiapó**</p>
+</div>
+
+<br>
+
+El análisis estadístico de la velocidad del viento observada y medida en la estación Copiapó es el siguiente.
+
+<br>
+
+<div class="centered-text">
+  <p>**Tabla III.1: Análisis estadístico de la velocidad del viento en la estación Copiapó**</p>
+</div>
+
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE}
+
+MFError = round(200 * mean(abs(Velocidad$ws.y - Velocidad$ws.x) / (Velocidad$ws.y + Velocidad$ws.x), na.rm = TRUE), 2)
+
+MFBias <- round(200 * mean((Velocidad$ws.y - Velocidad$ws.x) / (Velocidad$ws.y + Velocidad$ws.x), na.rm = TRUE), 2)
+
+IOAgreement = round(md(Velocidad$ws.y, Velocidad$ws.x), 2)
+
+df <- data.frame(IOA = "1,0",
+                 `Criterio IOA` = "> 0,8",
+                 MFE = MFError,
+                 `Criterio MFE` = "<+/- 70,0",
+                 MFB = MFBias,
+                 `Criterio MFB` = "<+/- 60,0")
+
+colnames(df) <- c("IOA", "Criterio IOA", "MFE", "Criterio MFE", "MFB", "Criterio MFB")
+
+pander(df, justify = "center")
+
+```
+
+MFB: Sesgo fraccional  
+MFE: Error fraccional medio  
+IOA: Índice de acuerdo (Index of Agreement)
+
+<br>
+
+Las Figuras 3.2 a 3.5 muestran las rosas de viento y ciclos horarios de la dirección del viento medida y modelada en la estación Copiapó. De ella se observa que el modelo de pronóstico meteorológico logra reproducir satisfactoriamente el ciclo diario y la tendencia de la dirección del viento.
+
+<div style="text-align: center;">
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE}
+
+windRose(Met_Observados_Copiapo, key.position="right", auto.text = FALSE, paddle = FALSE, annotate = c("Promedio", "Calma"), key.header = "Wind Speed (m/s)",
+         key.footer = "")
+
+windRose(Met_Modelados_Copiapo, key.position="right", auto.text = FALSE, paddle = FALSE, annotate = c("Promedio", "Calma"), key.header = "Wind Speed (m/s)",
+         key.footer = "")
+
+```
+
+**Figura 3.2: Rosa de viento período total: Observada y Modelada de la estación Copiapó**
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE}
+
+MetObs_Diurno_Copiapo <- selectByDate(Met_Observados_Copiapo, hour = 08:20)
+MetMod_Diurno_Copiapo <- selectByDate(Met_Modelados_Copiapo, hour = 08:20)
+
+windRose(MetObs_Diurno_Copiapo, key.position="right", auto.text = FALSE, paddle = FALSE, annotate = c("Promedio", "Calma"), key.header = "Wind Speed (m/s)",
+         key.footer = "")
+
+windRose(MetMod_Diurno_Copiapo, key.position="right", auto.text = FALSE, paddle = FALSE, annotate = c("Promedio", "Calma"), key.header = "Wind Speed (m/s)",
+         key.footer = "")
+
+```
+
+**Figura 3.3: Rosa de viento período diurno: Observada y Modelada de la estación Copiapó**
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE}
+MetObs_Nocturno_Copiapo <- selectByDate(Met_Observados_Copiapo, hour = c(00:07, 21:23))
+MetMod_Nocturno_Copiapo <- selectByDate(Met_Modelados_Copiapo, hour = c(00:07, 21:23))
+
+windRose(MetObs_Nocturno_Copiapo, key.position="right", auto.text = FALSE, paddle = FALSE, annotate = c("Promedio", "Calma"), key.header = "Wind Speed (m/s)",
+         key.footer = "")
+
+windRose(MetMod_Nocturno_Copiapo, key.position="right", auto.text = FALSE, paddle = FALSE, annotate = c("Promedio", "Calma"), key.header = "Wind Speed (m/s)",
+         key.footer = "")
+```
+
+**Figura 3.4: Rosa de viento período nocturno: Observada y Modelada de la estación Copiapó**
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE, results='hide'}
+
+rf <- colorRampPalette(rev(brewer.pal(11,'Spectral')))
+r <- rf(32)
+
+HoraYdireccion_Obs_Copiapo <-  Met_Observados_Copiapo %>% 
+  dplyr::select(Hora, wd)
+
+hist2d(HoraYdireccion_Obs_Copiapo, nbins = 24, col = r, xlab = "Horas del día", ylab = "Dirección del Viento")
+
+HoraYdireccion_Mod_Copiapo <-  Met_Modelados_Copiapo %>% 
+  dplyr::select(Hora, wd)
+
+hist2d(HoraYdireccion_Mod_Copiapo, nbins = 24, col = r, xlab = "Horas del día", ylab = "Dirección del Viento")
+
+```
+
+**Figura 3.5: Ciclo horario de la dirección del viento: Observado y Modelado de la estación Copiapó**
+
+</div>
+
+<br>
+
+El análisis estadístico de la dirección del viento observada y medida en la estación Copiapó es el siguiente.
+
+<br>
+
+<div class="centered-text">
+
+**Tabla III.2: Análisis estadístico de la dirección del viento en la estación Copiapó **
+
+</div>
+
+<center>
+
+```{r, message = FALSE, echo = FALSE, warning=FALSE}
+
+Direccion <- inner_join(Met_Observados_Copiapo[c('date', 'wd')], Met_Modelados_Copiapo[c('date', 'wd')], by = "date")
+
+MFError = round(200 * mean(abs(Direccion$wd.y - Direccion$wd.x) / (Direccion$wd.y + Direccion$wd.x), na.rm = TRUE), 2)
+
+MFBias <- round(200 * mean((Direccion$wd.y - Direccion$wd.x) / (Direccion$wd.y + Direccion$wd.x), na.rm = TRUE), 2)
+
+df <- data.frame(MFE = MFError,
+                 `Criterio MFE` = "<+/- 70,0",
+                 MFB = MFBias,
+                 `Criterio MFB` = "<+/- 60,0")
+
+colnames(df) <- c("MFE", "Criterio MFE", "MFB", "Criterio MFB")
+
+pander(df, justify = "center")
+```
+
+</center>
+
+MFB: Sesgo fraccional  
+MFE: Error fraccional medio
+
+<br>
+
+### 3.2	EVALUACIÓN DEL PRONÓSTICO DE SO2
+
+La Figura 3.6 muestra el ciclo horario de las concentraciones de SO2 (µg/m3) medida y modelada en la estacion Copiapo, para el mes de `r MesDelReporte` del año `r fecha_termino_year`. De ella se observa que el pronóstico de SO2 sigue el patrón diario de lo que ocurre en la estacion Copiapo, con valores promedio bajo 500 µg/m3.
+
+<br>
+
+<center>
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE}
+
+SO2 <- inner_join(MeanSO2byHour_Observados_Copiapo, MeanSO2byHour_Modelados_Copiapo, by = "Hora")
+
+SO2_longer <- pivot_longer(SO2, cols = c("SO2_Obs", "SO2_Mod"))
+
+SO2_longer %>% 
+  ggplot(aes(x = Hora, y = value, color = name)) +
+  geom_line() +
+  theme_bw() +
+  labs(x = "Hora del día", y = "SO2 (µg/m3N)") +
+  theme(legend.position = "top", legend.title = element_blank()) +
+  scale_color_discrete(labels = c("Observado", "Modelado")) +
+  scale_x_continuous(breaks = seq(0,23,1))
+
+```
+
+**Figura 3.6: Promedio horario de las concentraciones de SO2 medidas y modeladas de la estación Copiapo de ENAMI**
+
+</center>
+
+<br>
+
+El análisis estadístico de las concentraciones de SO2 observados y medidos en la estación Copiapo se muestra en la tabla III.3. De ella se observa que el modelo presenta un buen desempeño debido a que los estadísticos se encuentran dentro del rango aceptable.
+
+<br>
+
+<center>
+
+**Tabla III.3: Análisis estadístico de SO2 en la estación Copiapo**
+
+```{r, message = FALSE, echo = FALSE, warning=FALSE}
+
+MFError = round(200 * mean(abs(SO2$SO2_Mod - SO2$SO2_Obs) / (SO2$SO2_Mod + SO2$SO2_Obs), na.rm = TRUE), 2)
+
+MFBias <- round(200 * mean((SO2$SO2_Mod - SO2$SO2_Obs) / (SO2$SO2_Mod + SO2$SO2_Obs), na.rm = TRUE), 2)
+
+df <- data.frame(MFE = MFError,
+                 `Criterio MFE` = "<+/- 70,0",
+                 MFB = MFBias,
+                 `Criterio MFB` = "<+/- 60,0")
+
+colnames(df) <- c("MFE", "Criterio MFE", "MFB", "Criterio MFB")
+
+pander(df, justify = "center")
+```
+
+</center>
+
+MFB: Sesgo fraccional  
+MFE: Error fraccional medio
+
+<br>
+
+```{r, message = FALSE, echo = FALSE}
+
+ExactitudSO2_Copiapo <- inner_join(SO2_Modelados_Copiapo[c('Fecha', 'SO2_Mod')], SO2_Observados_Copiapo[c('Fecha', 'SO2_Obs')], by = 'Fecha')
+
+ExactitudSO2_Copiapo <- ExactitudSO2_Copiapo %>% 
+  mutate(Bueno = case_when((between(SO2_Obs, 0, 350) & between(SO2_Mod, 0, 350)) | (!between(SO2_Obs, 0, 350) & (!between(SO2_Mod, 0, 350))) ~ 1,
+                           TRUE ~ 0),
+         Regular = case_when((between(SO2_Obs, 350, 500) & between(SO2_Mod, 350, 500)) | (!between(SO2_Obs, 350, 500) & (!between(SO2_Mod, 350, 500))) ~ 1,
+                             TRUE ~ 0),
+         Alerta1 = case_when((between(SO2_Obs, 500, 650) & between(SO2_Mod, 500, 650)) | (!between(SO2_Obs, 500, 650) & (!between(SO2_Mod, 500, 650))) ~ 1,
+                             TRUE ~ 0),
+         Alerta2 = case_when((between(SO2_Obs, 650, 950) & between(SO2_Mod, 650, 950)) | (!between(SO2_Obs, 650, 950) & (!between(SO2_Mod, 650, 950))) ~ 1,
+                             TRUE ~ 0),
+         Alerta3 = case_when((SO2_Obs > 950 & SO2_Mod > 950) | (SO2_Obs < 950 & SO2_Mod < 950) ~ 1,
+                             TRUE ~ 0)
+  )
+
+pct_bueno = sum(ExactitudSO2_Copiapo$Bueno, na.rm = TRUE) / nrow(ExactitudSO2_Copiapo)
+pct_regular = sum(ExactitudSO2_Copiapo$Regular, na.rm = TRUE) / nrow(ExactitudSO2_Copiapo)
+pct_alerta1 = sum(ExactitudSO2_Copiapo$Alerta1, na.rm = TRUE) / nrow(ExactitudSO2_Copiapo)
+pct_alerta2 = sum(ExactitudSO2_Copiapo$Alerta2, na.rm = TRUE) / nrow(ExactitudSO2_Copiapo)
+pct_alerta3 = sum(ExactitudSO2_Copiapo$Alerta3, na.rm = TRUE) / nrow(ExactitudSO2_Copiapo)
+promedio_Copiapo = mean(c(pct_bueno, pct_regular, pct_alerta1, pct_alerta2, pct_alerta3))
+
+```
+
+**3.2.1	Evaluación del pronóstico como herramienta de gestión**
+
+Para evaluar el desempeño del modelo de pronóstico de SO2, se dispone de la base de datos de `r MesDelReporte` `r fecha_termino_year`, de las concentraciones de SO2 medidas en la estación Copiapo, las cuales se comparan con las concentraciones de SO2 pronosticadas por GEOMET para igual período.
+
+La evaluación se realiza por niveles de gestión, y se calcula la Exactitud del pronóstico para cada nivel.
+
+La Tabla III.4 muestra la Exactitud del modelo de pronóstico para el período evaluado en la estación Copiapo. De ella se observa que en promedio, el acierto del modelo es de un `r label_percent(0.1)(promedio_Copiapo)`, para el período de `r MesDelReporte` `r fecha_termino_year`.
+
+<center>
+
+<br>
+
+**Tabla III.4: Exactitud en la estimación del SO2 – Estación Copiapo**
+
+```{r, message = FALSE, echo = FALSE, warning=FALSE}
+
+df <- data.frame(Nivel = c("Bueno", "Regular", "Alerta1", "Alerta2", "Alerta3", "Promedio"),
+                 `Exactitud (%)` = c(label_percent(0.1)(pct_bueno),
+                                     label_percent(0.1)(pct_regular),
+                                     label_percent(0.1)(pct_alerta1),
+                                     label_percent(0.1)(pct_alerta2),
+                                     label_percent(0.1)(pct_alerta3),
+                                     label_percent(0.1)(promedio_Copiapo)))
+
+colnames(df) <- c("Nivel", "Exactitud (%)")
+emphasize.strong.cells(which(df == promedio_Copiapo | df == "Promedio", arr.ind = TRUE))
+pander(df, justify = "center")
+
+```
+
+</center>
+
+## Conclusiones
+
+### Conclusiones
+
+Del análisis del desempeño del modelo de pronóstico meteorológico y de SO2, se concluye que éste presenta un buen ajuste al evaluar su acierto en términos gráficos y estadísticos.
+
+Para el SO2, el modelo logra un buen acierto en todos los niveles de gestión y además, logra reproducir el ciclo horario-diario, lo que asegura que si se toman las medidas de control en los horarios previos a los máximos, se puede reducir el impacto en receptores de interés.
+
+De esta forma, el buen desempeño del modelo de pronóstico, permiten concluir que esta herramienta desarrollada para ENAMI, cumple con los requerimientos para realizar una adecuada gestión de riesgos por SO2.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
